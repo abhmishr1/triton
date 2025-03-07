@@ -522,6 +522,25 @@ class JITFunction(KernelInterface[T]):
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, target, backend, binder
 
+    def _save_temps(self, kernel, target):
+        save_temps_dir = os.getenv("TRITON_SAVETEMPS_DIR", "").strip() or os.getcwd()
+        if target.backend == 'hip':
+            save_temps_basename = kernel.name + '-hip-amdgcn-amd-amdhsa-' + target.arch
+            asm_co = kernel.asm['hsaco']
+            asm_s = kernel.asm['amdgcn']
+        else:
+            save_temps_basename = kernel.name + '-' + target.arch
+            asm_co = kernel.asm['cubin']
+            asm_s = kernel.asm['ptx']
+
+        save_temps_filepath = os.path.join(save_temps_dir, save_temps_basename)
+        with open(save_temps_filepath + '.out', 'wb') as f:
+            f.write(asm_co)
+        f.close()
+        with open(save_temps_filepath + '.s', 'w') as f:
+            f.write(asm_s)
+        f.close()
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
@@ -567,6 +586,9 @@ class JITFunction(KernelInterface[T]):
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
+            save_temp_files = os.environ.get("TRITON_SAVETEMPS", "0") == "1"
+            if save_temp_files:
+                self._save_temps(kernel, target)
             kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
