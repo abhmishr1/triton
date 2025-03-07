@@ -10,6 +10,7 @@ from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 from ..runtime.driver import driver
+from ..backends.compiler import GPUTarget
 from types import ModuleType
 from .._utils import find_paths_if, get_iterable_path
 
@@ -541,6 +542,16 @@ class JITFunction(KernelInterface[T]):
             f.write(asm_s)
         f.close()
 
+    def get_aux_target(self):
+        arch = os.getenv('TRITON_SAVETEMPS_AUX_TARGET')
+        if driver.active.get_current_target().backend == 'hip':
+            warp_size = 32 if 'gfx10' in arch or 'gfx11' in arch or 'gfx12' in arch else 64
+        else:
+            warp_size = 32
+        target = GPUTarget(driver.active.get_current_target().backend, arch, warp_size)
+
+        return target
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
@@ -589,6 +600,16 @@ class JITFunction(KernelInterface[T]):
             save_temp_files = os.environ.get("TRITON_SAVETEMPS", "0") == "1"
             if save_temp_files:
                 self._save_temps(kernel, target)
+            if "TRITON_SAVETEMPS_AUX_TARGET" in os.environ:
+                aux_target = self.get_aux_target()
+                aux_options = options
+                aux_options.__dict__['arch'] = os.getenv('TRITON_SAVETEMPS_AUX_TARGET')
+                aux_kernel = self.compile(
+                    src,
+                    target=aux_target,
+                    options=aux_options.__dict__,
+                )
+                self._save_temps(aux_kernel, aux_target)
             kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
