@@ -542,6 +542,19 @@ class JITFunction(KernelInterface[T]):
             f.write(asm_s)
         f.close()
 
+    def _update_fn_name(self, constexpr_params):
+        for key, val in constexpr_params.items():
+            strkey = str(key)
+            strval = str(val)
+            spchars = re.compile("[-@!#$%^&*()<>?/|\\{}~:.]")
+
+            if spchars.search(strkey):
+                raise ValueError(f"constrexpr param {strkey} has a special character")
+            if spchars.search(strval):
+                raise ValueError(f"constrexpr param {strval} has a special character")
+
+            self._fn_name += "_" + strkey + "_" + strval
+
     def get_aux_target(self):
         arch = os.getenv('TRITON_SAVETEMPS_AUX_TARGET')
         if driver.active.get_current_target().backend == 'hip':
@@ -588,6 +601,13 @@ class JITFunction(KernelInterface[T]):
             # constexprs
             constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
             constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
+            constexpr_params = {
+                p.name: v
+                for (v, p) in zip(tuple(bound_args.values()), self.params)
+                if p.is_constexpr
+            }
+            _fn_orig_name = self._fn_name
+            self._update_fn_name(constexpr_params)
             # attributes
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
@@ -612,6 +632,7 @@ class JITFunction(KernelInterface[T]):
                 self._save_temps(aux_kernel, aux_target)
             kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
+            self._fn_name = _fn_orig_name
 
         # Check that used global values have not changed.
         not_present = object()
